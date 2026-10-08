@@ -46,7 +46,11 @@ func handleConnection(conn net.Conn, kv *keyvalues.KeyValues) {
 		}
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
-			conn.Write([]byte("-ERR : Empty command" + "\n"))
+			_, err = conn.Write([]byte("-ERR : Empty command" + "\n"))
+			if err != nil {
+				fmt.Println("Write error:", err)
+				return
+			}
 			continue
 		}
 		switch strings.ToUpper(parts[0]) {
@@ -60,19 +64,31 @@ func handleConnection(conn net.Conn, kv *keyvalues.KeyValues) {
 			}
 			return
 		}
-		err = validate_string(parts)
 
-		if err != nil {
-			conn.Write([]byte("-ERR " + err.Error() + "\n"))
+		if err := validate_string(parts); err != nil {
+			_, writeErr := conn.Write(
+				[]byte("-ERR " + err.Error() + "\n"),
+			)
+
+			if writeErr != nil {
+				fmt.Println("Write error:", writeErr)
+				return
+			}
+
 			continue
 		}
 
-		fmt.Println(line)
+		fmt.Printf(
+			"[%s] %s",
+			conn.RemoteAddr(),
+			line,
+		)
+
 		response := dispatch(parts, kv)
 		_, err = conn.Write([]byte(response))
 
 		if err != nil {
-			fmt.Println("CLient Disconnected")
+			fmt.Println("CLient Disconnected", conn.RemoteAddr())
 			return
 		}
 	}
