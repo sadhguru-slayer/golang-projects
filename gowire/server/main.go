@@ -4,12 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	keyvalues "server/keyValues"
+	"server/keyValues"
 	"strings"
 )
 
 func main() {
 	kv := keyvalues.CreateKeyValue()
+	manager := NewConnectionManager()
 	listen, err := net.Listen("tcp", ":6140")
 
 	if err != nil {
@@ -26,22 +27,44 @@ func main() {
 			fmt.Println("Client disconnected. ERROR:", err)
 			continue
 		}
-		fmt.Println("Client connected:", conn.RemoteAddr(), conn.LocalAddr())
+
+		client := manager.NewClient(conn)
+		manager.Add(client)
+		fmt.Printf(
+			"Client %d connected: %s\n",
+			client.ID,
+			conn.RemoteAddr(),
+		)
+		fmt.Println(client.IsAuthenticated())
+		fmt.Printf("Active clients: %d\n", manager.Count())
+
 		go func() {
-			handleConnection(conn, kv)
+			handleConnection(client, manager, kv)
 		}()
 	}
 }
 
-func handleConnection(conn net.Conn, kv *keyvalues.KeyValues) {
-	defer conn.Close()
+func handleConnection(client *Client, manager *ConnectionManager,kv *keyvalues.KeyValues) {
+	defer func() {
+		manager.Remove(client.ID)
+		client.Conn.Close()
+
+		fmt.Printf("Client %d disconnected\n", client.ID)
+		fmt.Printf("Active clients: %d\n", manager.Count())
+	}()
+
+	conn := client.Conn
 
 	buffer := bufio.NewReader(conn)
 
 	for {
 		line, err := buffer.ReadString('\n')
 		if err != nil {
-			fmt.Println("Client disconnected. ERROR:", err)
+			fmt.Printf(
+				"Client %d read error: %v\n",
+				client.ID,
+				err,
+			)
 			return
 		}
 		parts := strings.Fields(line)
@@ -65,6 +88,31 @@ func handleConnection(conn net.Conn, kv *keyvalues.KeyValues) {
 			return
 		}
 
+		if !client.IsAuthenticated() {
+			if strings.ToUpper(parts[0]) != "AUTH" {
+			_, err := conn.Write(
+				[]byte("-ERR authentication required\n"),
+			)
+			if err != nil {
+				fmt.Println("Write error:", err)
+				return
+			}
+			continue
+		}
+	}
+		if strings.ToUpper(parts[0]) != "AUTH"{
+			if len(parts) != 3 {
+				_, err := conn.Write(
+				[]byte("-ERR AUTH require 3 parameters\n"),
+			)
+			if err != nil {
+				fmt.Println("Write error:", err)
+				return
+			}
+			}
+			
+		}
+
 		if err := validate_string(parts); err != nil {
 			_, writeErr := conn.Write(
 				[]byte("-ERR " + err.Error() + "\n"),
@@ -78,17 +126,11 @@ func handleConnection(conn net.Conn, kv *keyvalues.KeyValues) {
 			continue
 		}
 
-		fmt.Printf(
-			"[%s] %s",
-			conn.RemoteAddr(),
-			line,
-		)
-
 		response := dispatch(parts, kv)
 		_, err = conn.Write([]byte(response))
 
 		if err != nil {
-			fmt.Println("CLient Disconnected", conn.RemoteAddr())
+			fmt.Printf("Client %d write error: %v\n", client.ID, err)
 			return
 		}
 	}
